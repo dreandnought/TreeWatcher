@@ -4,6 +4,7 @@ import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 import sys
 import os
+import json
 
 class TreeWatcherApp(tb.Window):
     def __init__(self):
@@ -15,18 +16,29 @@ class TreeWatcherApp(tb.Window):
         icon_path = self.resource_path("tree.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
+            
+        # Load configuration
+        self.load_config()
         
         # Configure layout
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
+
+        # Progress Bar (very thin at top)
+        # Configure a specific style for a thin blue progress bar
+        # 'primary' is usually blue in Cosmo theme
+        self.style.configure('Thin.primary.Horizontal.TProgressbar', thickness=3)
+        
+        self.progress = tb.Progressbar(self, orient=HORIZONTAL, mode='determinate', style='Thin.primary.Horizontal.TProgressbar')
+        self.progress.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
 
         # Usage Label
         usage_label = tb.Label(self, text='usage: tree /F > "D:\\tree_output.txt"', bootstyle="info")
-        usage_label.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 0))
+        usage_label.grid(row=1, column=0, sticky="ew", padx=10, pady=(5, 0))
 
         # Header
         header_frame = tb.Frame(self)
-        header_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        header_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=5)
         
         self.path_label = tb.Label(header_frame, text="File: Not loaded")
         self.path_label.pack(side=LEFT, fill=X, expand=YES)
@@ -37,7 +49,7 @@ class TreeWatcherApp(tb.Window):
 
         # Treeview
         tree_frame = tb.Frame(self)
-        tree_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
+        tree_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=5)
         
         # Add scrollbars
         vsb = tb.Scrollbar(tree_frame, orient="vertical")
@@ -60,10 +72,43 @@ class TreeWatcherApp(tb.Window):
         # Status
         self.status_var = tk.StringVar(value="Ready")
         status_bar = tb.Label(self, textvariable=self.status_var, bootstyle="secondary")
-        status_bar.grid(row=3, column=0, sticky="ew", padx=10, pady=2)
+        status_bar.grid(row=4, column=0, sticky="ew", padx=10, pady=2)
 
         # Load file immediately
         self.after(100, self.load_default_file)
+        
+    def load_config(self):
+        # Determine config path
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            
+        config_path = os.path.join(app_dir, "config.json")
+        
+        # Default icons
+        self.file_icon = "📄"
+        self.folder_icon = "📂"
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    self.file_icon = config.get("file_icon", self.file_icon)
+                    self.folder_icon = config.get("folder_icon", self.folder_icon)
+            except Exception as e:
+                print(f"Error loading config: {e}")
+        else:
+            # Create default config
+            try:
+                default_config = {
+                    "file_icon": self.file_icon,
+                    "folder_icon": self.folder_icon
+                }
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(default_config, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                print(f"Error creating config: {e}")
 
     def resource_path(self, relative_path):
         """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -128,78 +173,7 @@ class TreeWatcherApp(tb.Window):
             self.status_var.set(f"Error loading file: {str(e)}")
             messagebox.showerror("Error", f"Failed to load file:\n{str(e)}")
 
-    def parse_and_build_tree(self, lines):
-        # Stack to keep track of (item_id, depth)
-        # Root is assumed to be depth 0
-        stack = [] 
-        
-        # Skip header lines if they are detected as non-tree lines
-        # Heuristic: look for the first line that looks like a root (no indentation chars usually)
-        # or standard "Folder PATH listing" header.
-        
-        start_index = 0
-        for i, line in enumerate(lines):
-            if "PATH" in line and "listing" in line:
-                continue
-            if "Volume serial number" in line:
-                continue
-            # Found potential root or first item
-            start_index = i
-            break
-            
-        # Process the root (first valid line)
-        if start_index < len(lines):
-            root_line = lines[start_index].rstrip()
-            root_text = root_line
-            # Root usually has no prefix in tree /F /A output, e.g. "D:."
-            root_id = self.tree.insert("", "end", text=f"📂 {root_text}", open=True)
-            stack.append({"id": root_id, "depth": 0})
-            start_index += 1
 
-        for i in range(start_index, len(lines)):
-            line = lines[i].rstrip()
-            if not line:
-                continue
-
-            depth, name, is_last_child = self.parse_line(line)
-            
-            # Formatting text
-            display_text = name
-            
-            # Find parent
-            # We need to find the node in stack with depth == current_depth - 1
-            # Pop stack until we find the parent
-            while stack and stack[-1]["depth"] >= depth:
-                stack.pop()
-            
-            if stack:
-                parent_id = stack[-1]["id"]
-            else:
-                # Should not happen if root is parsed correctly, fallback to root
-                parent_id = "" 
-            
-            # Insert item
-            # We don't know if it's a folder or file yet, but we can guess or update later.
-            # In tree /F, both files and folders are listed.
-            # We can't distinguish purely by line content easily without lookahead.
-            # But we can use a generic icon for now.
-            # Or heuristic: if the name has an extension, maybe file? Not reliable.
-            # We will default to "File" icon, and if it becomes a parent later (has children), update icon?
-            # Treeview doesn't support updating text easily based on children existence during parse
-            # unless we do 2 passes.
-            # For now, let's use a generic node icon or assume file.
-            # Better: Use "📄" for everything, then if we add a child to it, change it to "📂"?
-            # Tkinter Treeview item update: tree.item(item_id, text="new text")
-            
-            item_id = self.tree.insert(parent_id, "end", text=f"📄 {display_text}", open=False)
-            stack.append({"id": item_id, "depth": depth})
-            
-            # Check if parent needs to be marked as folder
-            if parent_id:
-                parent_text = self.tree.item(parent_id, "text")
-                if parent_text.startswith("📄"):
-                    new_text = parent_text.replace("📄", "📂", 1)
-                    self.tree.item(parent_id, text=new_text)
 
     def parse_line(self, line):
         # Calculate depth based on 4-char chunks
@@ -229,34 +203,40 @@ class TreeWatcherApp(tb.Window):
                  
              # 2. Check if chunk starts with spacer char
              if chunk.startswith("│") or chunk.startswith("|") or chunk.startswith(" "):
-                 # Check for non-spacer characters inside this chunk
-                 # Allow spacer chars: │, |, space
-                 # Allow connector chars: ├, └, +, \ (if inside, treat as end of indent block but consume block)
-                 
                  found_name_char = False
                  safe_len = 4
                  
+                 compressed_indent = False
                  for i, char in enumerate(chunk):
                      if char in ["│", "|", " "]:
+                         if i > 0 and char in ["│", "|"]:
+                             # Compressed indentation detected (e.g. "│  │").
+                             # The second bar starts a new level.
+                             safe_len = i
+                             compressed_indent = True
+                             break
                          continue
                      elif char in ["├", "└", "+", "\\"]:
-                         # Connector found inside chunk (e.g. "│ └─").
-                         # This chunk is the last indentation level.
-                         safe_len = 4 
-                         break
+                        # Connector found inside chunk (e.g. "│ └─").
+                        found_name_char = True
+                        safe_len = i 
+                        break
                      else:
                          # Found a char that is neither spacer nor connector (part of name)
-                         # e.g. "│  c" -> 'c' is name.
                          found_name_char = True
-                         safe_len = i # Consume up to name char
+                         safe_len = i 
                          break
                  
-                 if found_name_char:
+                 if compressed_indent:
+                     depth += 1
+                     idx += safe_len
+                     # Continue parsing next chunk (don't break)
+                 elif found_name_char:
                      depth += 1
                      idx += safe_len
                      break # Stop parsing indentation, name starts immediately
                  else:
-                     # Standard spacer block or block ending with connector
+                     # Standard spacer block
                      depth += 1
                      idx += 4
                          
@@ -321,11 +301,25 @@ class TreeWatcherApp(tb.Window):
             root_line = lines[start_index].rstrip()
             root_text = root_line
             # Root usually has no prefix in tree /F /A output, e.g. "D:."
-            root_id = self.tree.insert("", "end", text=f"📂 {root_text}", open=True)
+            root_id = self.tree.insert("", "end", text=f"{self.folder_icon} {root_text}", open=True)
             stack.append({"id": root_id, "depth": 0})
             start_index += 1
 
+        # Setup progress bar
+        total_lines = len(lines) - start_index
+        self.progress['maximum'] = total_lines
+        self.progress['value'] = 0
+        update_interval = max(1, total_lines // 100) # Update every 1% or at least every 1 line
+        
+        processed_count = 0
+
         for i in range(start_index, len(lines)):
+            # Update progress
+            processed_count += 1
+            if processed_count % update_interval == 0:
+                self.progress['value'] = processed_count
+                self.update_idletasks() # Allow UI to update
+            
             line = lines[i].rstrip()
             if not line:
                 continue
@@ -364,15 +358,19 @@ class TreeWatcherApp(tb.Window):
             # Better: Use "📄" for everything, then if we add a child to it, change it to "📂"?
             # Tkinter Treeview item update: tree.item(item_id, text="new text")
             
-            item_id = self.tree.insert(parent_id, "end", text=f"📄 {display_text}", open=False)
+            item_id = self.tree.insert(parent_id, "end", text=f"{self.file_icon} {display_text}", open=False)
             stack.append({"id": item_id, "depth": depth})
             
             # Check if parent needs to be marked as folder
             if parent_id:
                 parent_text = self.tree.item(parent_id, "text")
-                if parent_text.startswith("📄"):
-                    new_text = parent_text.replace("📄", "📂", 1)
+                if parent_text.startswith(self.file_icon):
+                    new_text = parent_text.replace(self.file_icon, self.folder_icon, 1)
                     self.tree.item(parent_id, text=new_text)
+
+        # Final progress update
+        self.progress['value'] = total_lines
+        self.update_idletasks()
 
 if __name__ == "__main__":
     app = TreeWatcherApp()
