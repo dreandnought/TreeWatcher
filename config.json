@@ -1,4 +1,11 @@
 {
     "file_icon": "📄",
-    "folder_icon": "📂"
+    "folder_icon": "📂",
+    "file_type_icons": {
+            "image": "🖼️",
+            "video": "🎬",
+            "json": "{}",
+            "yaml": "⚙️",
+            "txt": "📝"
+        }
 }

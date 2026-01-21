@@ -89,6 +89,13 @@ class TreeWatcherApp(tb.Window):
         # Default icons
         self.file_icon = "📄"
         self.folder_icon = "📂"
+        self.file_type_icons = {
+            "image": "🖼️",
+            "video": "🎬",
+            "json": "{}",
+            "yaml": "⚙️",
+            "txt": "📝"
+        }
         
         if os.path.exists(config_path):
             try:
@@ -96,6 +103,9 @@ class TreeWatcherApp(tb.Window):
                     config = json.load(f)
                     self.file_icon = config.get("file_icon", self.file_icon)
                     self.folder_icon = config.get("folder_icon", self.folder_icon)
+                    # Load custom file type icons if present
+                    custom_types = config.get("file_type_icons", {})
+                    self.file_type_icons.update(custom_types)
             except Exception as e:
                 print(f"Error loading config: {e}")
         else:
@@ -103,12 +113,31 @@ class TreeWatcherApp(tb.Window):
             try:
                 default_config = {
                     "file_icon": self.file_icon,
-                    "folder_icon": self.folder_icon
+                    "folder_icon": self.folder_icon,
+                    "file_type_icons": self.file_type_icons
                 }
                 with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(default_config, f, indent=4, ensure_ascii=False)
             except Exception as e:
                 print(f"Error creating config: {e}")
+
+    def get_file_icon(self, filename):
+        ext = os.path.splitext(filename)[1].lower()
+        if not ext:
+            return self.file_icon
+            
+        if ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp']:
+            return self.file_type_icons.get("image", self.file_icon)
+        elif ext in ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv']:
+            return self.file_type_icons.get("video", self.file_icon)
+        elif ext == '.json':
+            return self.file_type_icons.get("json", self.file_icon)
+        elif ext in ['.yaml', '.yml']:
+            return self.file_type_icons.get("yaml", self.file_icon)
+        elif ext in ['.txt', '.md', '.log', '.ini', '.conf']:
+            return self.file_type_icons.get("txt", self.file_icon)
+        
+        return self.file_icon
 
     def resource_path(self, relative_path):
         """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -302,7 +331,7 @@ class TreeWatcherApp(tb.Window):
             root_text = root_line
             # Root usually has no prefix in tree /F /A output, e.g. "D:."
             root_id = self.tree.insert("", "end", text=f"{self.folder_icon} {root_text}", open=True)
-            stack.append({"id": root_id, "depth": 0})
+            stack.append({"id": root_id, "depth": 0, "clean_name": root_text})
             start_index += 1
 
         # Setup progress bar
@@ -355,18 +384,38 @@ class TreeWatcherApp(tb.Window):
             # Treeview doesn't support updating text easily based on children existence during parse
             # unless we do 2 passes.
             # For now, let's use a generic node icon or assume file.
-            # Better: Use "📄" for everything, then if we add a child to it, change it to "📂"?
+            # Determine icon based on extension (heuristic for files)
+            icon = self.get_file_icon(display_text)
+            
             # Tkinter Treeview item update: tree.item(item_id, text="new text")
             
-            item_id = self.tree.insert(parent_id, "end", text=f"{self.file_icon} {display_text}", open=False)
-            stack.append({"id": item_id, "depth": depth})
+            item_id = self.tree.insert(parent_id, "end", text=f"{icon} {display_text}", open=False)
+            stack.append({"id": item_id, "depth": depth, "clean_name": display_text})
             
             # Check if parent needs to be marked as folder
             if parent_id:
-                parent_text = self.tree.item(parent_id, "text")
-                if parent_text.startswith(self.file_icon):
-                    new_text = parent_text.replace(self.file_icon, self.folder_icon, 1)
-                    self.tree.item(parent_id, text=new_text)
+                # If we are adding a child to a node, that node is definitely a folder.
+                # Previous heuristic might have marked it as a specific file type (e.g. .json file that actually has children? Unlikely but possible in some views)
+                # Or it was marked as generic file.
+                # We should update it to folder icon.
+                
+                # Retrieve parent info from stack or tree? 
+                # Parent is stack[-2] usually, but let's rely on tree item text or just force update.
+                # Better: we stored clean_name in stack, so we can reconstruct the folder text.
+                
+                # Find parent in stack
+                parent_stack_item = None
+                for item in reversed(stack):
+                    if item["id"] == parent_id:
+                        parent_stack_item = item
+                        break
+                
+                if parent_stack_item:
+                    # Check if it already has folder icon to avoid unnecessary updates
+                    current_parent_text = self.tree.item(parent_id, "text")
+                    if not current_parent_text.startswith(self.folder_icon):
+                        new_text = f"{self.folder_icon} {parent_stack_item['clean_name']}"
+                        self.tree.item(parent_id, text=new_text)
 
         # Final progress update
         self.progress['value'] = total_lines
